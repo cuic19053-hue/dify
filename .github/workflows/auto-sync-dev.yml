@@ -1,0 +1,64 @@
+name: Upstream Auto Sync & PR to Dev
+
+on:
+  schedule:
+    # 每天北京时间上午 10:00 (UTC 02:00) 自动触发
+    - cron: '0 2 * * *'
+  # 支持在 GitHub 网页 Actions 页面手动随时点击运行
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync-upstream:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码 (包含所有历史)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 配置 Git 机器人信息
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: 1. 同步官方 upstream 到 main
+        run: |
+          git remote add upstream https://github.com/langgenius/dify.git || true
+          git fetch upstream main
+          git checkout main
+          git merge --ff-only upstream/main || git merge --no-edit upstream/main
+          git push origin main
+
+      - name: 2. 检查 dev 分支并获取最新状态
+        run: |
+          git fetch origin dev:dev || true
+
+      - name: 3. 检测 dev 是否落后于 main
+        id: check_diff
+        run: |
+          git checkout dev
+          BEHIND_COUNT=$(git rev-list --count dev..origin/main)
+          echo "behind_count=$BEHIND_COUNT" >> $GITHUB_OUTPUT
+          echo "dev 分支落后 upstream $BEHIND_COUNT 个提交"
+
+      - name: 4. 自动向 dev 分支发起 PR
+        if: steps.check_diff.outputs.behind_count > 0
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: sync-upstream-to-dev
+          base: dev
+          title: '🤖 [Auto-Sync] 同步官方最新代码到 dev'
+          body: |
+            ### 🤖 自动化上游同步提示
+            官方 `upstream/main` 产生新更新，已自动同步到 `origin/main`。
+            本 PR 尝试将官方最新变动自动合并进你的 `dev` 开发分支。
+
+            - **如果无代码冲突**：可直接在网页端点击「Merge pull request」合入。
+            - **如果有代码冲突**：说明官方修改了你定制过的文件，请在本地检出本分支解决冲突。
+          labels: automated-sync, upstream-update
